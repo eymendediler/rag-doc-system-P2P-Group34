@@ -209,3 +209,8 @@ __marimo__/
 # App data
 storage/
 uploads/
+chroma_db/
+
+# Node.js / Vite
+node_modules/
+dist/

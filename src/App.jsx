@@ -12,12 +12,41 @@ export default function App() {
 
   const [input, setInput] = useState("");
   const [files, setFiles] = useState([]);
+  const [docIds, setDocIds] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
 
-  const handleFiles = (e) => {
-    setFiles(Array.from(e.target.files));
+  const handleFiles = async (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    setFiles((prev) => [...prev, ...selectedFiles]);
+    setIsUploading(true);
+
+    for (const file of selectedFiles) {
+      const formData = new FormData();
+      formData.append("file", file);
+      
+      try {
+        const res = await fetch("http://localhost:8000/upload", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.filename) {
+           setDocIds(prev => {
+             if (!prev.includes(data.filename)) {
+                return [...prev, data.filename];
+             }
+             return prev;
+           });
+        }
+      } catch (err) {
+        console.error("Upload error:", err);
+      }
+    }
+    setIsUploading(false);
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (!input.trim()) return;
 
     const question = input;
@@ -26,12 +55,79 @@ export default function App() {
     setMessages((prev) => [
       ...prev,
       { role: "user", content: question },
-      {
-        role: "assistant",
-        content:
-          "Demo cevap: Backend bağlandığında burada dokümanlarından gelen gerçek RAG cevabı, özet ve kaynaklar görünecek 🚀",
-      },
+      { role: "assistant", content: "", sources: [] },
     ]);
+    setIsTyping(true);
+    
+    try {
+      const currentMessages = [...messages, { role: "user", content: question }];
+      
+      const response = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+           messages: currentMessages.map(m => ({ role: m.role, content: m.content })),
+           doc_ids: docIds.length > 0 ? docIds : undefined
+        })
+      });
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunkStr = decoder.decode(value, { stream: true });
+        const lines = chunkStr.split("\n");
+        
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const dataStr = line.replace("data: ", "");
+            if (dataStr === "[DONE]") break;
+            
+            try {
+              const data = JSON.parse(dataStr);
+              if (data.type === "sources") {
+                 setMessages((prev) => {
+                    const newMessages = [...prev];
+                    const lastIdx = newMessages.length - 1;
+                    newMessages[lastIdx] = { ...newMessages[lastIdx], sources: data.sources };
+                    return newMessages;
+                 });
+              } else if (data.type === "content") {
+                 setMessages((prev) => {
+                    const newMessages = [...prev];
+                    const lastIdx = newMessages.length - 1;
+                    newMessages[lastIdx] = { ...newMessages[lastIdx], content: newMessages[lastIdx].content + data.content };
+                    return newMessages;
+                 });
+              } else if (data.type === "error") {
+                 console.error("LLM Error:", data.error);
+                 setMessages((prev) => {
+                    const newMessages = [...prev];
+                    const lastIdx = newMessages.length - 1;
+                    newMessages[lastIdx] = { ...newMessages[lastIdx], content: newMessages[lastIdx].content + "\n[Hata oluştu]" };
+                    return newMessages;
+                 });
+              }
+            } catch (e) {
+               console.error("JSON parse error:", e);
+            }
+          }
+        }
+      }
+      
+    } catch (err) {
+       console.error("Chat error:", err);
+       setMessages(prev => {
+          const newMessages = [...prev];
+          newMessages[newMessages.length - 1].content = "Bir hata oluştu. Lütfen tekrar deneyin.";
+          return newMessages;
+       });
+    } finally {
+       setIsTyping(false);
+    }
   };
 
   return (
@@ -125,7 +221,7 @@ export default function App() {
             <div className="top-line">
               <span className="badge">RAG Powered Assistant</span>
               <span className="live-pill">
-                <span></span> Demo Ready
+                <span></span> Live API
               </span>
             </div>
 
@@ -186,13 +282,13 @@ export default function App() {
           </div>
           <div>
             <span>✨</span>
-            <p>Özet Çıkarılan</p>
-            <h3>{files.length ? files.length : 3}</h3>
+            <p>Vektör Veritabanı</p>
+            <h3>{docIds.length} doc</h3>
           </div>
           <div>
             <span>⚡</span>
             <p>Durum</p>
-            <h3>Hazır</h3>
+            <h3>{isUploading ? "Yükleniyor..." : isTyping ? "Yazıyor..." : "Hazır"}</h3>
           </div>
         </section>
 
@@ -203,11 +299,12 @@ export default function App() {
                 <strong>{msg.role === "user" ? "Sen" : "🤖 DocMind"}</strong>
                 <p>{msg.content}</p>
 
-                {msg.role === "assistant" && i > 0 && (
+                {msg.role === "assistant" && i > 0 && msg.sources && msg.sources.length > 0 && (
                   <div className="sources">
                     <b>Kaynaklar</b>
-                    <span>📌 YZTA_5.0_P2P_2.pdf — proje tanımı</span>
-                    <span>📌 uploaded_document.docx — ilgili bölüm</span>
+                    {msg.sources.map((src, idx) => (
+                       <span key={idx}>📌 {src}</span>
+                    ))}
                   </div>
                 )}
               </div>
