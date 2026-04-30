@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+pydantic-settings
+python-multipart
+pymupdf
+python-docx
+chromadb
+google-genai
+groq
+sse-starlette
